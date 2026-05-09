@@ -11,6 +11,10 @@ ButtonBuilder,
 ButtonStyle
 } = require('discord.js')
 
+const mongoose = require('mongoose')
+
+const QRCode = require('qrcode')
+
 const client = new Client({
 intents: [
 GatewayIntentBits.Guilds,
@@ -20,6 +24,9 @@ GatewayIntentBits.GuildMembers
 ]
 })
 
+mongoose.connect(process.env.MONGO_URI)
+.then(() => console.log('MONGO ONLINE'))
+
 const filas = {}
 const mediadores = []
 const perfis = {}
@@ -28,17 +35,15 @@ client.once('ready', () => {
 console.log('BOT ONLINE')
 })
 
-client.on('interactionCreate', async interaction => {
+client.on('messageCreate', async message => {
 
-if (!interaction.isChatInputCommand()) return
+if (message.author.bot) return
 
-// /configurar
-if (interaction.commandName === 'configurar') {
+// !ORG
+if (message.content === '!org') {
 
-if (!interaction.member.permissions.has(PermissionsBitField.Flags.Administrator)) {
-return interaction.reply({
-content: 'Sem permissão'
-})
+if (!message.member.permissions.has(PermissionsBitField.Flags.Administrator)) {
+return message.reply('Sem permissão')
 }
 
 // CARGOS
@@ -57,85 +62,78 @@ const cargos = [
 
 for (const cargo of cargos) {
 
-if (!interaction.guild.roles.cache.find(r => r.name === cargo)) {
+if (!message.guild.roles.cache.find(r => r.name === cargo)) {
 
-await interaction.guild.roles.create({
+await message.guild.roles.create({
 name: cargo
 })
 }
 }
 
 // CATEGORIAS
-const categoriaFilas = await interaction.guild.channels.create({
+const categoriaFilas = await message.guild.channels.create({
 name: '🎮 FILAS',
 type: ChannelType.GuildCategory
 })
 
-const categoriaApostas = await interaction.guild.channels.create({
+const categoriaApostas = await message.guild.channels.create({
 name: '💸 APOSTAS',
 type: ChannelType.GuildCategory
 })
 
-const categoriaSS = await interaction.guild.channels.create({
+const categoriaSS = await message.guild.channels.create({
 name: '🛡️ SS',
 type: ChannelType.GuildCategory
 })
 
-// CANAIS
-const canais = [
+const categoriaMedia = await message.guild.channels.create({
+name: '🎧 MEDIAÇÃO',
+type: ChannelType.GuildCategory
+})
+
+// CANAIS FILAS
+const filasOrg = [
 '1x1-mobile',
 '2x2-mobile',
 '3x3-mobile',
 '4x4-mobile',
+
 '1x1-misto',
 '2x2-misto',
 '3x3-misto',
 '4x4-misto',
+
 '1x1-emulador',
 '2x2-emulador',
 '3x3-emulador',
-'4x4-emulador',
-'fila-mediadores',
-'solicitacao-ss'
+'4x4-emulador'
 ]
 
-for (const nome of canais) {
+for (const fila of filasOrg) {
 
-let categoria = categoriaFilas.id
-
-if (nome === 'solicitacao-ss') {
-categoria = categoriaSS.id
-}
-
-const canal = await interaction.guild.channels.create({
-name: nome,
+const canal = await message.guild.channels.create({
+name: fila,
 type: ChannelType.GuildText,
-parent: categoria
+parent: categoriaFilas.id
 })
 
-// FILAS
-if (
-nome.includes('1x1') ||
-nome.includes('2x2') ||
-nome.includes('3x3') ||
-nome.includes('4x4')
-) {
-
 const embed = new EmbedBuilder()
-.setTitle('🎮 FILA')
-.setDescription('Clique abaixo para entrar na fila.')
-.setThumbnail(interaction.guild.iconURL())
+.setTitle('🎮 FILA DE APOSTA')
+.setDescription(`
+Clique abaixo para entrar na fila.
+`)
+.setThumbnail(message.guild.iconURL())
 .setColor('#00ff88')
 
 const row = new ActionRowBuilder()
 .addComponents(
 new ButtonBuilder()
-.setCustomId(`fila_${nome}`)
+.setCustomId(`fila_${fila}`)
 .setLabel('Entrar')
 .setStyle(ButtonStyle.Success),
 
 new ButtonBuilder()
-.setCustomId(`sair_${nome}`)
+.setCustomId(`sair_${fila}`)
 .setLabel('Sair')
 .setStyle(ButtonStyle.Danger)
 )
@@ -145,23 +143,156 @@ embeds: [embed],
 components: [row]
 })
 }
+
+// CANAIS MEDIAÇÃO
+await message.guild.channels.create({
+name: 'fila-mediadores',
+type: ChannelType.GuildText,
+parent: categoriaMedia.id
+})
+
+await message.guild.channels.create({
+name: 'pagamentos',
+type: ChannelType.GuildText,
+parent: categoriaMedia.id
+})
+
+// CANAIS SS
+await message.guild.channels.create({
+name: 'solicitacao-ss',
+type: ChannelType.GuildText,
+parent: categoriaSS.id
+})
+
+message.reply('ORG CONFIGURADA')
 }
 
-interaction.reply({
-content: 'Servidor configurado'
+// .P
+if (message.content.startsWith('.p')) {
+
+const user = message.mentions.users.first() || message.author
+
+if (!perfis[user.id]) {
+perfis[user.id] = {
+wins: 0,
+loses: 0
+}
+}
+
+const perfil = perfis[user.id]
+
+const embed = new EmbedBuilder()
+.setTitle(`📊 PERFIL`)
+.setDescription(`
+Usuário:
+${user}
+
+Vitórias:
+${perfil.wins}
+
+Derrotas:
+${perfil.loses}
+`)
+.setThumbnail(user.displayAvatarURL())
+.setColor('#00ff88')
+
+message.reply({
+embeds: [embed]
 })
 }
 
-// /limpar
-if (interaction.commandName === 'limpar') {
+// SSMOB
+if (message.content === '.ssmob') {
 
-const mensagens = await interaction.channel.messages.fetch()
+const canal = message.guild.channels.cache.find(
+c => c.name === 'solicitacao-ss'
+)
 
-await interaction.channel.bulkDelete(mensagens)
+if (canal) {
 
-interaction.reply({
-content: 'Canal limpo'
+const embed = new EmbedBuilder()
+.setTitle('🚨 SOLICITAÇÃO SS MOBILE')
+.setDescription(`
+Player:
+${message.author}
+`)
+.setColor('#ff0000')
+
+const row = new ActionRowBuilder()
+.addComponents(
+new ButtonBuilder()
+.setCustomId('aceitar_ss')
+.setLabel('Aceitar')
+.setStyle(ButtonStyle.Success),
+
+new ButtonBuilder()
+.setCustomId('wo_ss')
+.setLabel('W.O')
+.setStyle(ButtonStyle.Danger),
+
+new ButtonBuilder()
+.setCustomId('limpo_ss')
+.setLabel('Limpo')
+.setStyle(ButtonStyle.Primary)
+)
+
+canal.send({
+embeds: [embed],
+components: [row]
 })
+}
+}
+
+// SSEMU
+if (message.content === '.ssemu') {
+
+const canal = message.guild.channels.cache.find(
+c => c.name === 'solicitacao-ss'
+)
+
+if (canal) {
+
+const embed = new EmbedBuilder()
+.setTitle('🚨 SOLICITAÇÃO SS EMULADOR')
+.setDescription(`
+Player:
+${message.author}
+`)
+.setColor('#ff0000')
+
+const row = new ActionRowBuilder()
+.addComponents(
+new ButtonBuilder()
+.setCustomId('aceitar_ss')
+.setLabel('Aceitar')
+.setStyle(ButtonStyle.Success),
+
+new ButtonBuilder()
+.setCustomId('wo_ss')
+.setLabel('W.O')
+.setStyle(ButtonStyle.Danger),
+
+new ButtonBuilder()
+.setCustomId('limpo_ss')
+.setLabel('Limpo')
+.setStyle(ButtonStyle.Primary)
+)
+
+canal.send({
+embeds: [embed],
+components: [row]
+})
+}
+}
+
+// !LIMPAR
+if (message.content === '!limpar') {
+
+const mensagens = await message.channel.messages.fetch()
+
+await message.channel.bulkDelete(mensagens)
+
+message.channel.send('Canal limpo')
 }
 })
 
@@ -180,6 +311,7 @@ filas[fila] = []
 }
 
 if (filas[fila].includes(interaction.user.id)) {
+
 return interaction.reply({
 content: 'Você já está na fila',
 ephemeral: true
@@ -214,14 +346,11 @@ allow: [PermissionsBitField.Flags.ViewChannel]
 })
 
 const embed = new EmbedBuilder()
-.setTitle('💸 CONFIRMAÇÃO')
+.setTitle('💸 APOSTA ENCONTRADA')
 .setDescription(`
-Jogadores:
+${jogadores.map(id => `<@${id}>`).join('\n')}
 
-<@${jogadores[0]}>
-<@${jogadores[1]}>
-
-Confirme para iniciar.
+Confirmem abaixo.
 `)
 .setThumbnail(interaction.guild.iconURL())
 .setColor('#00ff88')
@@ -229,12 +358,12 @@ Confirme para iniciar.
 const row = new ActionRowBuilder()
 .addComponents(
 new ButtonBuilder()
-.setCustomId('confirmar')
+.setCustomId('confirmar_aposta')
 .setLabel('Confirmar')
 .setStyle(ButtonStyle.Success),
 
 new ButtonBuilder()
-.setCustomId('cancelar')
+.setCustomId('cancelar_aposta')
 .setLabel('Cancelar')
 .setStyle(ButtonStyle.Danger)
 )
@@ -248,7 +377,7 @@ components: [row]
 }
 
 // CANCELAR
-if (interaction.customId === 'cancelar') {
+if (interaction.customId === 'cancelar_aposta') {
 
 interaction.reply({
 content: 'Aposta cancelada'
@@ -260,12 +389,12 @@ interaction.channel.delete()
 }
 
 // CONFIRMAR
-if (interaction.customId === 'confirmar') {
+if (interaction.customId === 'confirmar_aposta') {
 
 const mediador = mediadores[0]
 
 const embed = new EmbedBuilder()
-.setTitle('✅ APOSTA INICIADA')
+.setTitle('✅ APOSTA CONFIRMADA')
 .setDescription(`
 Mediador:
 ${mediador ? `<@${mediador}>` : 'Nenhum disponível'}
@@ -281,12 +410,12 @@ new ButtonBuilder()
 .setStyle(ButtonStyle.Success),
 
 new ButtonBuilder()
-.setCustomId('sala')
+.setCustomId('fornecer_sala')
 .setLabel('Fornecer Sala')
 .setStyle(ButtonStyle.Primary),
 
 new ButtonBuilder()
-.setCustomId('finalizar')
+.setCustomId('finalizar_aposta')
 .setLabel('Finalizar')
 .setStyle(ButtonStyle.Danger)
 )
@@ -305,13 +434,18 @@ ephemeral: true
 // PIX
 if (interaction.customId === 'pix') {
 
+const chavePix = '11999999999'
+
+const qr = await QRCode.toDataURL(chavePix)
+
 const embed = new EmbedBuilder()
 .setTitle('💸 PAGAMENTO')
 .setDescription(`
 Chave PIX:
-11999999999
+
+${chavePix}
 `)
-.setThumbnail(interaction.guild.iconURL())
+.setImage(qr)
 .setColor('#00ff88')
 
 interaction.reply({
@@ -319,17 +453,18 @@ embeds: [embed]
 })
 }
 
-// SALA
-if (interaction.customId === 'sala') {
+// FORNECER SALA
+if (interaction.customId === 'fornecer_sala') {
 
 const embed = new EmbedBuilder()
 .setTitle('🎮 SALA')
 .setDescription(`
-ID: 123456
+ID:
+123456
 
-Senha: 123
+SENHA:
+123
 `)
-.setThumbnail(interaction.guild.iconURL())
 .setColor('#00ff88')
 
 interaction.reply({
@@ -338,7 +473,7 @@ embeds: [embed]
 }
 
 // FINALIZAR
-if (interaction.customId === 'finalizar') {
+if (interaction.customId === 'finalizar_aposta') {
 
 interaction.reply({
 content: 'Aposta finalizada'
@@ -348,85 +483,29 @@ setTimeout(() => {
 interaction.channel.delete()
 }, 5000)
 }
-})
 
-// COMANDOS TEXTO
-client.on('messageCreate', async message => {
+// ACEITAR SS
+if (interaction.customId === 'aceitar_ss') {
 
-if (message.author.bot) return
-
-// .p
-if (message.content.startsWith('.p')) {
-
-const user = message.mentions.users.first() || message.author
-
-if (!perfis[user.id]) {
-perfis[user.id] = {
-wins: 0,
-loses: 0
-}
-}
-
-const perfil = perfis[user.id]
-
-const embed = new EmbedBuilder()
-.setTitle(`📊 PERFIL`)
-.setDescription(`
-Usuário:
-${user}
-
-Vitórias:
-${perfil.wins}
-
-Derrotas:
-${perfil.loses}
-`)
-.setThumbnail(user.displayAvatarURL())
-.setColor('#00ff88')
-
-message.reply({
-embeds: [embed]
+interaction.reply({
+content: 'SS ACEITO'
 })
 }
 
-// .ssmob
-if (message.content === '.ssmob') {
+// WO
+if (interaction.customId === 'wo_ss') {
 
-const canal = message.guild.channels.cache.find(
-c => c.name === 'solicitacao-ss'
-)
-
-if (canal) {
-
-const embed = new EmbedBuilder()
-.setTitle('🚨 SOLICITAÇÃO SS MOBILE')
-.setDescription(`${message.author}`)
-.setColor('#ff0000')
-
-canal.send({
-embeds: [embed]
+interaction.reply({
+content: 'W.O aplicado'
 })
 }
-}
 
-// .ssemu
-if (message.content === '.ssemu') {
+// LIMPO
+if (interaction.customId === 'limpo_ss') {
 
-const canal = message.guild.channels.cache.find(
-c => c.name === 'solicitacao-ss'
-)
-
-if (canal) {
-
-const embed = new EmbedBuilder()
-.setTitle('🚨 SOLICITAÇÃO SS EMULADOR')
-.setDescription(`${message.author}`)
-.setColor('#ff0000')
-
-canal.send({
-embeds: [embed]
+interaction.reply({
+content: 'Player limpo'
 })
-}
 }
 })
 
